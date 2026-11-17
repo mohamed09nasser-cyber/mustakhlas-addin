@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مستخلص: تجربة Outlook</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root { --ink: #142A2E; --muted: #6B7C7D; --line: #E2DED3; --bg: #F6F4EE; --gold: #A8823A; --ok: #2E7D4F; --bad: #B4432F; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.6 "Segoe UI", Tahoma, sans-serif; }
+  main { padding: 14px; display: grid; gap: 12px; }
+  h1 { font-size: 18px; margin: 0; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  h2 { font-size: 14px; margin: 0 0 4px; }
+  p { margin: 0 0 8px; color: var(--muted); }
+  button { font: 600 13px "Segoe UI", Tahoma, sans-serif; border-radius: 8px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--ink); background: var(--ink); color: #fff; }
+  button.q { background: #fff; color: var(--ink); }
+  select { font: inherit; padding: 6px; border-radius: 8px; border: 1px solid var(--line); max-width: 100%; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); border-radius: 8px; padding: 8px; margin: 8px 0 0; font: 12px/1.5 Consolas, monospace; direction: ltr; text-align: left; max-height: 260px; overflow: auto; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>تجربة Outlook</h1>
+  <p>كل زرار بيجرّب طريقة. مفيش حاجة بتتنقل غير لو دوست «انقل الإيميل المفتوح». في الآخر دوس «انسخ النتايج» وابعتها.</p>
+
+  <section>
+    <h2>1. قراءة فولدر كامل (EWS)</h2>
+    <p>بيجيب فولدرات الإيميل، وتختار فولدر يعرض إيميلاته اللي فيها مرفقات.</p>
+    <div class="row">
+      <button id="ews-folders">هات الفولدرات</button>
+      <select id="ews-folder" hidden></select>
+      <button class="q" id="ews-items" hidden>اعرض إيميلات الفولدر</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="q" id="ews-move" hidden>انقل الإيميل المفتوح للفولدر ده</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. تحديد كذا إيميل مرة واحدة</h2>
+    <p>حدد كذا إيميل في Outlook (Ctrl أو Ctrl+A)، وبعدين دوس الزرار.</p>
+    <button id="multi">اقرا الإيميلات المحددة ومرفقاتها</button>
+  </section>
+
+  <section>
+    <h2>3. علامة «تم» على الإيميل المفتوح</h2>
+    <p>بيحط على الإيميل المفتوح تصنيف «مستخلص - تم»، وتقدر تشيله بعدها عادي.</p>
+    <button id="cat">حط العلامة</button>
+  </section>
+
+  <section>
+    <div class="row"><h2 style="flex:1">النتايج</h2><button class="q" id="copy">انسخ النتايج</button></div>
+    <pre id="out">بيفتح…</pre>
+  </section>
+</main>
+<script>
+  const out = document.getElementById("out");
+  const lines = [];
+  function log(s) { lines.push(s); out.textContent = lines.join("\n"); out.scrollTop = out.scrollHeight; }
+  function esc(s) { return String(s == null ? "" : s).replace(/[<>&"']/g, c => ({"<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;"}[c])); }
+  function sets() { const ok = []; for (let i = 1; i <= 15; i++) if (Office.context.requirements.isSetSupported("Mailbox", "1." + i)) ok.push("1." + i); return ok; }
+  const mb = () => Office.context.mailbox;
+
+  function ews(body) {
+    const env = '<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+      'xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types" ' +
+      'xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Header><t:RequestServerVersion Version="Exchange2013"/></soap:Header><soap:Body>' + body + '</soap:Body></soap:Envelope>';
+    return new Promise((ok, bad) => {
+      if (!mb().makeEwsRequestAsync) return bad(new Error("makeEwsRequestAsync مش موجودة هنا"));
+      mb().makeEwsRequestAsync(env, r => {
+        if (r.status !== "succeeded") return bad(new Error((r.error && (r.error.code + " " + r.error.message)) || "failed"));
+        const x = new DOMParser().parseFromString(r.value, "text/xml");
+        const fault = x.getElementsByTagName("faultstring")[0] || [...x.getElementsByTagName("*")].find(e => e.localName === "MessageText");
+        const rc = [...x.getElementsByTagName("*")].find(e => e.localName === "ResponseCode");
+        if (rc && rc.textContent !== "NoError") return bad(new Error(rc.textContent + (fault ? ": " + fault.textContent : "")));
+        ok(x);
+      });
+    });
+  }
+  const tags = (x, n) => [...x.getElementsByTagName("*")].filter(e => e.localName === n);
+  const kid = (e, n) => [...e.children].find(c => c.localName === n);
+
+  document.getElementById("ews-folders").onclick = async () => {
+    log("--- EWS folders");
+    try {
+      const x = await ews('<m:FindFolder Traversal="Deep"><m:FolderShape><t:BaseShape>Default</t:BaseShape></m:FolderShape>' +
+        '<m:ParentFolderIds><t:DistinguishedFolderId Id="msgfolderroot"/></m:ParentFolderIds></m:FindFolder>');
+      const fs = tags(x, "Folder").map(f => ({ id: kid(f, "FolderId").getAttribute("Id"), name: (kid(f, "DisplayName") || {}).textContent, n: (kid(f, "TotalCount") || {}).textContent }));
+      log("OK: " + fs.length + " folders");
+      const sel = document.getElementById("ews-folder");
+      sel.innerHTML = fs.map(f => `<option value="${esc(f.id)}">${esc(f.name)} (${esc(f.n)})</option>`).join("");
+      sel.hidden = false; document.getElementById("ews-items").hidden = false; document.getElementById("ews-move").hidden = false;
+    } catch (e) { log("FAIL: " + e.message); }
+  };
+  document.getElementById("ews-items").onclick = async () => {
+    const id = document.getElementById("ews-folder").value;
+    log("--- EWS items in: " + document.getElementById("ews-folder").selectedOptions[0].textContent);
+    try {
+      const x = await ews('<m:FindItem Traversal="Shallow"><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties>' +
+        '<t:FieldURI FieldURI="item:Subject"/><t:FieldURI FieldURI="item:HasAttachments"/><t:FieldURI FieldURI="item:DateTimeReceived"/></t:AdditionalProperties></m:ItemShape>' +
+        '<m:IndexedPageItemView MaxEntriesReturned="30" Offset="0" BasePoint="Beginning"/><m:ParentFolderIds><t:FolderId Id="' + esc(id) + '"/></m:ParentFolderIds></m:FindItem>');
+      const its = tags(x, "Message");
+      log("OK: " + its.length + " emails");
+      its.slice(0, 10).forEach(m => log("  " + ((kid(m, "HasAttachments") || {}).textContent === "true" ? "[att] " : "      ") + ((kid(m, "Subject") || {}).textContent || "").slice(0, 60)));
+      const first = its.find(m => (kid(m, "HasAttachments") || {}).textContent === "true");
+      if (first) {
+        const y = await ews('<m:GetItem><m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:AdditionalProperties><t:FieldURI FieldURI="item:Attachments"/></t:AdditionalProperties></m:ItemShape>' +
+          '<m:ItemIds><t:ItemId Id="' + esc(kid(first, "ItemId").getAttribute("Id")) + '"/></m:ItemIds></m:GetItem>');
+        const atts = tags(y, "FileAttachment");
+        log("attachments of first: " + atts.map(a => (kid(a, "Name") || {}).textContent).join(", "));
+        if (atts[0]) {
+          const z = await ews('<m:GetAttachment><m:AttachmentIds><t:AttachmentId Id="' + esc(kid(atts[0], "AttachmentId").getAttribute("Id")) + '"/></m:AttachmentIds></m:GetAttachment>');
+          const c = tags(z, "Content")[0];
+          log("download attachment: OK, " + Math.round((c ? c.textContent.length : 0) * 0.75 / 1024) + " KB");
+        }
+      }
+    } catch (e) { log("FAIL: " + e.message); }
+  };
+  document.getElementById("ews-move").onclick = async () => {
+    const it = mb().item, sel = document.getElementById("ews-folder");
+    if (!it) return log("افتح إيميل الأول");
+    log("--- EWS move open email to: " + sel.selectedOptions[0].textContent);
+    try {
+      await ews('<m:MoveItem><m:ToFolderId><t:FolderId Id="' + esc(sel.value) + '"/></m:ToFolderId><m:ItemIds><t:ItemId Id="' + esc(it.itemId) + '"/></m:ItemIds></m:MoveItem>');
+      log("OK: moved");
+    } catch (e) { log("FAIL: " + e.message); }
+  };
+
+  document.getElementById("multi").onclick = () => {
+    log("--- selected emails");
+    if (!mb().getSelectedItemsAsync) return log("FAIL: getSelectedItemsAsync not supported (needs Mailbox 1.13)");
+    mb().getSelectedItemsAsync(async r => {
+      if (r.status !== "succeeded") return log("FAIL: " + r.error.message);
+      log("OK: " + r.value.length + " selected");
+      r.value.slice(0, 10).forEach(m => log("  " + (m.hasAttachment ? "[att] " : "      ") + (m.subject || "").slice(0, 60)));
+      const first = r.value.find(m => m.hasAttachment);
+      if (!first) return;
+      if (!mb().loadItemByIdAsync) return log("loadItemByIdAsync not supported (needs Mailbox 1.15)");
+      mb().loadItemByIdAsync(first.itemId, lr => {
+        if (lr.status !== "succeeded") return log("FAIL load: " + lr.error.message);
+        const item = lr.value, atts = item.attachments || [];
+        log("attachments of first: " + atts.map(a => a.name).join(", "));
+        const a = atts.find(x => !x.isInline);
+        if (!a) { item.unloadAsync && item.unloadAsync(); return; }
+        item.getAttachmentContentAsync(a.id, cr => {
+          if (cr.status !== "succeeded") log("FAIL content: " + cr.error.message);
+          else log("download attachment: OK, " + Math.round(cr.value.content.length * 0.75 / 1024) + " KB (" + cr.value.format + ")");
+          item.unloadAsync && item.unloadAsync();
+        });
+      });
+    });
+  };
+
+  document.getElementById("cat").onclick = () => {
+    log("--- category");
+    const it = mb().item, name = "مستخلص - تم";
+    if (!it) return log("افتح إيميل الأول");
+    if (!it.categories) return log("FAIL: categories not supported (needs Mailbox 1.8)");
+    const add = () => it.categories.addAsync([name], r => log(r.status === "succeeded" ? "OK: category added" : "FAIL: " + r.error.message));
+    mb().masterCategories.getAsync(g => {
+      if (g.status === "succeeded" && g.value.some(c => c.displayName === name)) return add();
+      mb().masterCategories.addAsync([{ displayName: name, color: Office.MailboxEnums.CategoryColor.Preset4 }], a => {
+        if (a.status !== "succeeded") log("master category: " + a.error.message);
+        add();
+      });
+    });
+  };
+
+  document.getElementById("copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(out.textContent); log("(copied)"); }
+    catch (e) { const t = document.createElement("textarea"); t.value = out.textContent; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); log("(copied)"); }
+  };
+
+  Office.onReady(info => {
+    lines.length = 0;
+    const d = Office.context.diagnostics || {};
+    log("host: " + info.host + " / " + info.platform + " / " + (d.version || "") + " / " + (d.hostName || ""));
+    log("Mailbox sets: " + sets().join(" "));
+    log("ews: " + (typeof mb().makeEwsRequestAsync === "function" ? "function present" : "missing"));
+  });
+</script>
+</body>
+</html>
