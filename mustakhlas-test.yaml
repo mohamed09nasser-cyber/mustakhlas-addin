@@ -1,0 +1,153 @@
+name: Mustakhlas test
+description: 'Checks that the Mustakhlas panel can run inside Excel.'
+host: EXCEL
+api_set: {}
+script:
+  content: |
+    const list = document.getElementById('list') as HTMLElement;
+    const rows: any = {};
+    function set(id: string, state: string, text: string, detail?: string) {
+      let li = rows[id];
+      if (!li) { li = rows[id] = document.createElement('li'); list.appendChild(li); }
+      li.className = state;
+      li.innerHTML = '<span class="m">' + (({ok:'✓', bad:'✗', wait:'…'} as any)[state]) + '</span><div></div>';
+      (li.lastChild as HTMLElement).textContent = text;
+      if (detail) { const s = document.createElement('small'); s.textContent = detail; (li.lastChild as HTMLElement).appendChild(s); }
+    }
+    const TEST = 'تجربة مستخلص';
+
+    set('office', 'wait', 'تشغيل الإضافة جوه الإكسيل');
+    Office.onReady(async (info: any) => {
+      if (info.host !== Office.HostType.Excel) { set('office', 'bad', 'الإضافة مش شغالة جوه الإكسيل', String(info.host)); return; }
+      const v: any = (Office.context.diagnostics || {});
+      set('office', 'ok', 'الإضافة شغالة جوه الإكسيل', [v.platform, v.version].filter(Boolean).join(' '));
+      const sets = ['1.4', '1.8', '1.10', '1.12'].map((x: string) => x + (Office.context.requirements.isSetSupported('ExcelApi', x) ? ' ✓' : ' ✗'));
+      set('api', Office.context.requirements.isSetSupported('ExcelApi', '1.10') ? 'ok' : 'bad', 'أدوات الإكسيل المتاحة', 'ExcelApi ' + sets.join('، '));
+      (document.getElementById('b-write') as HTMLButtonElement).disabled = false;
+      (document.getElementById('b-del') as HTMLButtonElement).disabled = false;
+      await readBook();
+      await netCheck();
+    });
+
+    async function readBook() {
+      set('book', 'wait', 'قراءة الملف المفتوح');
+      try {
+        await Excel.run(async (ctx) => {
+          const wb = ctx.workbook; wb.load('name');
+          const sheets = wb.worksheets; sheets.load('items/name');
+          const tables = wb.tables; tables.load('items/name');
+          await ctx.sync();
+          const names = sheets.items.map((s: any) => s.name);
+          set('book', 'ok', 'الملف المفتوح: ' + wb.name, names.length + ' شيت');
+          const t = tables.items.find((x: any) => x.name === 'Sub_Contractor');
+          if (t) {
+            const r = t.getRange(); r.load('rowCount,address');
+            await ctx.sync();
+            set('table', 'ok', 'لقيت جدول Sub_Contractor', r.rowCount + ' صف، ' + r.address);
+          } else {
+            set('table', names.includes('Sub Contractor') ? 'bad' : 'wait',
+                names.includes('Sub Contractor') ? 'شيت Sub Contractor موجود بس الجدول Sub_Contractor مش لاقيه' : 'افتح تقرير التكاليف علشان أدوّر على جدول Sub_Contractor', tables.items.map((x: any) => x.name).join('، '));
+          }
+          if (Office.context.requirements.isSetSupported('ExcelApi', '1.10')) {
+            const sl = wb.slicers; sl.load('items/name');
+            await ctx.sync();
+            set('slicers', 'ok', 'الـSlicers اللي في الملف: ' + sl.items.length, sl.items.map((x: any) => x.name).slice(0, 6).join('، '));
+          }
+        });
+      } catch (e) { set('book', 'bad', 'مقدرتش أقرا الملف', String((e as any) && (e as any).message || e)); }
+    }
+
+    async function netCheck() {
+      set('net', 'wait', 'الوصول لـGemini من جوه الإكسيل');
+      try {
+        const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=x', {method: 'GET'});
+        set('net', 'ok', 'Gemini بيرد من جوه الإكسيل', 'HTTP ' + r.status + ' (متوقع 400 لأن المفتاح تجربة)');
+      } catch (e) { set('net', 'bad', 'Gemini مش بيرد من جوه الإكسيل (ممكن الشبكة قافلاه)', String((e as any) && (e as any).message || e)); }
+    }
+
+    (document.getElementById('b-write') as HTMLButtonElement).onclick = async () => {
+      set('write', 'wait', 'الكتابة في شيت تجربة');
+      try {
+        await Excel.run(async (ctx) => {
+          let sh: any = ctx.workbook.worksheets.getItemOrNullObject(TEST);
+          await ctx.sync();
+          if (sh.isNullObject) sh = ctx.workbook.worksheets.add(TEST);
+          sh.getRange('A1:B1').values = [['تمام', new Date().toLocaleString()]];
+          sh.getRange('A1').format.fill.color = '#A8823A';
+          sh.getRange('A1').format.font.color = '#FFFFFF';
+          sh.activate();
+          await ctx.sync();
+        });
+        set('write', 'ok', 'كتبت «تمام» في شيت «' + TEST + '»');
+      } catch (e) { set('write', 'bad', 'الكتابة فشلت', String((e as any) && (e as any).message || e)); }
+    };
+
+    (document.getElementById('b-del') as HTMLButtonElement).onclick = async () => {
+      try {
+        await Excel.run(async (ctx) => {
+          const sh = ctx.workbook.worksheets.getItemOrNullObject(TEST);
+          await ctx.sync();
+          if (!sh.isNullObject) { sh.delete(); await ctx.sync(); }
+        });
+        set('write', 'ok', 'شيت التجربة اتمسح');
+      } catch (e) { set('write', 'bad', 'مقدرتش أمسح شيت التجربة', String((e as any) && (e as any).message || e)); }
+    };
+
+    (document.getElementById('b-py') as HTMLButtonElement).onclick = async (ev: any) => {
+      ev.target.disabled = true;
+      set('py', 'wait', 'تحميل بايثون (Pyodide)');
+      try {
+        await new Promise((ok: any, bad: any) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js'; s.onload = ok; s.onerror = () => bad(new Error('CDN blocked')); document.head.appendChild(s); });
+        const py = await (window as any).loadPyodide();
+        const out = py.runPython('import sys; f"Python {sys.version.split()[0]}: 2+2={2+2}"');
+        set('py', 'ok', 'بايثون شغال جوه الإكسيل', out);
+      } catch (e) { set('py', 'bad', 'بايثون ما اشتغلش', String((e as any) && (e as any).message || e)); }
+      ev.target.disabled = false;
+    };
+
+    (document.getElementById('b-copy') as HTMLButtonElement).onclick = async () => {
+      const txt = Array.from(list.children).map((li: any) => li.innerText.replace(/\n/g, ' — ')).join('\n');
+      try { await navigator.clipboard.writeText(txt); } catch (e) {
+        const t = document.createElement('textarea'); t.value = txt; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove();
+      }
+      (document.getElementById('b-copy') as HTMLElement).textContent = 'اتنسخت';
+    };
+  language: typescript
+template:
+  content: |
+    <div dir="rtl" lang="ar">
+    <header><b>مُستخلَص<i>.</i></b><p>إضافة تجربة: بتتأكد إن البرنامج يقدر يشتغل جوه الإكسيل</p></header>
+    <main>
+      <ul id="list"></ul>
+      <button class="primary" id="b-write" disabled>اكتب «تمام» في شيت تجربة</button>
+      <p class="note">بيعمل شيت جديد اسمه «تجربة مستخلص» ويكتب فيه. ملفك نفسه مش بيتلمس.</p>
+      <button id="b-del" disabled>امسح شيت التجربة</button>
+      <button id="b-py">جرّب تشغيل بايثون جوه الإكسيل</button>
+      <p class="note">بينزّل حوالي 10 ميجا مرة واحدة، فممكن ياخد دقيقة.</p>
+      <button id="b-copy">انسخ النتيجة</button>
+    </main>
+    </div>
+  language: html
+style:
+  content: |
+      :root { --ink:#142A2E; --brass:#A8823A; --paper:#F6F4EE; --line:#E2DED3; --ok:#2E8B5E; --bad:#B4432F; --mute:#6B7C7D; }
+      * { box-sizing: border-box; }
+      body { margin:0; font: 14px/1.6 "Segoe UI", Tahoma, sans-serif; background: var(--paper); color: var(--ink); }
+      header { background: var(--ink); color:#fff; padding: 14px 16px; }
+      header b { font-size: 22px; } header b i { color: var(--brass); font-style: normal; }
+      header p { margin: 2px 0 0; font-size: 12px; color:#9FB2B2; }
+      main { padding: 14px 16px 24px; }
+      ul { list-style: none; padding: 0; margin: 0 0 14px; }
+      li { display:flex; gap:8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+      li .m { flex:none; width:18px; text-align:center; font-weight:700; }
+      li.ok .m { color: var(--ok); } li.bad .m { color: var(--bad); } li.wait .m { color: var(--mute); }
+      li small { display:block; color: var(--mute); font-size: 12px; word-break: break-word; }
+      button { font: 600 13px "Segoe UI", Tahoma, sans-serif; border-radius: 8px; padding: 9px 12px; cursor: pointer; width:100%; margin-bottom: 8px;
+               border: 1px solid var(--ink); background:#fff; color: var(--ink); }
+      button.primary { background: var(--ink); color:#fff; }
+      button:disabled { opacity:.5; cursor: default; }
+      .note { font-size: 12px; color: var(--mute); margin: 4px 0 12px; }
+  language: css
+libraries: |
+  https://appsforoffice.microsoft.com/lib/1/hosted/office.js
+  @types/office-js
